@@ -1,0 +1,346 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>好玩球球</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+    canvas {
+      background: #f0f0f0;
+      display: block;
+      margin: 0 auto;
+    }
+    #restartBtn {
+      display: none;
+      font-size: 20px;
+      padding: 10px 20px;
+      background-color: #4CAF50;
+      color: white;
+      border: none;
+      cursor: pointer;
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+    }
+    #restartBtn:hover {
+      background-color: #45a049;
+    }
+  </style>
+</head>
+<body>
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<button id="restartBtn">重新開始</button>
+<audio id="mergeSound" src="assets/merge.mp3" preload="auto"></audio>
+<audio id="collapseSound" src="assets/collapse.mp3" preload="auto"></audio>
+<audio id="failSound" src="assets/fail.mp3" preload="auto"></audio>
+
+<script>
+const canvas = document.getElementById("gameCanvas");
+const ctx = canvas.getContext("2d");
+const mergeSound = document.getElementById("mergeSound");
+const collapseSound = document.getElementById("collapseSound");
+const failSound = document.getElementById("failSound");
+const restartBtn = document.getElementById("restartBtn");
+
+const ballImages = [];
+const ballTypes = 16;
+
+let balls = [];
+let gravity = 0.7;
+let friction = 0.01;
+let restitution = 0.5;
+let nextBallType = Math.floor(Math.random() * 3);
+const mergeThreshold = 50;
+let score = 0;
+let gameOver = false;
+
+let dropTracker = Array(Math.floor(canvas.width / 10)).fill(0);
+const dropDecayRate = 0.95;
+const collapseThreshold = 30;
+
+// 障礙物設定
+let obstacles = [];
+let obstacleImage = new Image();
+obstacleImage.src = 'assets/obstacle.png';
+
+function loadBallImages(callback) {
+  let loaded = 0;
+  for (let i = 0; i < ballTypes; i++) {
+    const img = new Image();
+    img.src = `assets/ball${i + 1}.png`;
+    img.onload = () => {
+      loaded++;
+      if (loaded === ballTypes) callback();
+    };
+    ballImages.push(img);
+  }
+}
+
+class Ball {
+  constructor(x, y, type) {
+    this.x = x;
+    this.y = y;
+    this.radius = 25 + type * 5;
+    this.vx = (Math.random() - 0.5) * 5;
+    this.vy = 0;
+    this.type = type;
+    this.rotation = 0;
+    this.angularVelocity = 0;
+  }
+
+  update() {
+    this.vy += gravity;
+    this.x += this.vx;
+    this.y += this.vy;
+
+    // 邊界碰撞
+    if (this.x - this.radius < 0) {
+      this.x = this.radius;
+      this.vx *= -restitution;
+      this.angularVelocity *= -restitution;
+    } else if (this.x + this.radius > canvas.width) {
+      this.x = canvas.width - this.radius;
+      this.vx *= -restitution;
+      this.angularVelocity *= -restitution;
+    }
+
+    if (this.y + this.radius > canvas.height) {
+      this.y = canvas.height - this.radius;
+      this.vy *= -restitution;
+      this.angularVelocity = this.vx / this.radius;
+    }
+
+    if (Math.abs(this.y + this.radius - canvas.height) < 1) {
+      this.angularVelocity = this.vx / this.radius;
+      this.vx *= 1 - friction;
+    }
+
+    this.rotation += this.angularVelocity;
+    this.vx *= 0.98;
+    this.vy *= 0.98;
+
+    this.checkObstacleCollision();
+  }
+
+  checkObstacleCollision() {
+    for (let obstacle of obstacles) {
+      const dx = this.x - obstacle.x;
+      const dy = this.y - obstacle.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      if (dist < this.radius + obstacle.radius) {
+        // 簡單反彈處理
+        this.vy *= -restitution;
+        this.vx *= -restitution;
+      }
+    }
+  }
+
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rotation);
+    ctx.beginPath();
+    ctx.arc(0, 0, this.radius, 0, Math.PI * 2);
+    ctx.closePath();
+    ctx.clip();
+    ctx.drawImage(
+      ballImages[this.type],
+      -this.radius,
+      -this.radius,
+      this.radius * 2,
+      this.radius * 2
+    );
+    ctx.restore();
+  }
+}
+
+class Obstacle {
+  constructor(x, y, radius) {
+    this.x = x;
+    this.y = y;
+    this.radius = radius;
+  }
+
+  draw() {
+    if (!obstacleImage.complete) return;
+    ctx.drawImage(obstacleImage, this.x - this.radius, this.y - this.radius, this.radius * 2, this.radius * 2);
+  }
+}
+
+function generateObstacles() {
+  if (!obstacleImage) return; // 沒有圖片時，不生成障礙物
+
+  const obstacleCount = 1; // 每次生成 5 顆障礙物
+  const margin = 50; // 增加邊界區域，避免障礙物靠太近
+
+  for (let i = 0; i < obstacleCount; i++) {
+    const x = Math.random() * (canvas.width - 2 * margin) + margin; // 隨機生成 x 座標
+
+    const y = Math.random() * (canvas.height * 0.4) + canvas.height * 0.6; // 下半部分
+
+    const width = 40 + Math.random() * 80; // 隨機生成較寬的寬度
+    const height = 10 + Math.random() * 20; // 隨機生成較低的高度
+    obstacles.push(new Obstacle(x, y, width, height));
+  }
+}
+
+
+canvas.addEventListener("click", (e) => {
+  if (gameOver) return;
+  const rect = canvas.getBoundingClientRect();
+  const x = e.clientX - rect.left;
+  spawnBall(x, 80);
+  updateDropTracker(x);
+});
+
+function updateDropTracker(x) {
+  const index = Math.floor(x / 10);
+  dropTracker[index] += 10;
+
+  if (dropTracker[index] >= collapseThreshold) {
+    collapseBallsNear(x);
+    dropTracker[index] = 0;
+    collapseSound.currentTime = 0;
+    collapseSound.play();
+  }
+}
+
+function collapseBallsNear(x) {
+  balls = balls.filter((ball) => Math.abs(ball.x - x) > 40);
+}
+
+function decayDropTracker() {
+  for (let i = 0; i < dropTracker.length; i++) {
+    dropTracker[i] *= dropDecayRate;
+  }
+}
+
+function spawnBall(x, y) {
+  balls.push(new Ball(x, y, nextBallType));
+  nextBallType = Math.floor(Math.random() * 3);
+}
+
+function resolveCollisionsAndMerge() {
+  for (let i = 0; i < balls.length; i++) {
+    for (let j = i + 1; j < balls.length; j++) {
+      const b1 = balls[i];
+      const b2 = balls[j];
+      const dx = b2.x - b1.x;
+      const dy = b2.y - b1.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const minDist = b1.radius + b2.radius;
+
+      if (dist < minDist && dist > 0) {
+        const overlap = minDist - dist;
+        const nx = dx / dist;
+        const ny = dy / dist;
+
+        b1.x -= nx * overlap / 2;
+        b1.y -= ny * overlap / 2;
+        b2.x += nx * overlap / 2;
+        b2.y += ny * overlap / 2;
+
+        const k = 0.5;
+        const dvx = b2.vx - b1.vx;
+        const dvy = b2.vy - b1.vy;
+        const dot = dvx * nx + dvy * ny;
+        if (dot < 0) {
+          const impulse = k * dot;
+          b1.vx += impulse * nx;
+          b1.vy += impulse * ny;
+          b2.vx -= impulse * nx;
+          b2.vy -= impulse * ny;
+        }
+
+        if (b1.type === b2.type) {
+          const newX = (b1.x + b2.x) / 2;
+          const newY = (b1.y + b2.y) / 2;
+          const newType = Math.min(b1.type + 1, ballTypes - 1);
+          balls.splice(j, 1);
+          balls.splice(i, 1);
+          balls.push(new Ball(newX, newY, newType));
+          score += (newType + 1) * 10;
+          mergeSound.currentTime = 0;
+          mergeSound.play();
+          return;
+        }
+      }
+    }
+  }
+}
+
+function updateGame() {
+  balls.forEach((ball) => ball.update());
+  for (let i = 0; i < 3; i++) resolveCollisionsAndMerge();
+  decayDropTracker();
+
+  for (let ball of balls) {
+    if (ball.y - ball.radius < 0) {
+      gameOver = true;
+      failSound.currentTime = 0;
+      failSound.play();
+      break;
+    }
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  obstacles.forEach(o => o.draw());
+  balls.forEach((ball) => ball.draw());
+
+  ctx.font = "16px sans-serif";
+  ctx.fillStyle = gameOver ? "red" : "#333";
+  ctx.fillText("Next:", 10, 20);
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(75, 20, 15, 0, Math.PI * 2);
+  ctx.closePath();
+  ctx.clip();
+  ctx.drawImage(ballImages[nextBallType], 60, 5, 30, 30);
+  ctx.restore();
+
+  ctx.fillText("Score: " + score, 300, 20);
+
+  if (gameOver) {
+    ctx.font = "30px sans-serif";
+    ctx.fillStyle = "red";
+    ctx.fillText("Game Over", 120, 300);
+    restartBtn.style.display = "block";
+  }
+}
+
+function gameLoop() {
+  if (!gameOver) updateGame();
+  draw();
+  requestAnimationFrame(gameLoop);
+}
+
+function restartGame() {
+  balls = [];
+  obstacles = [];
+  score = 0;
+  gameOver = false;
+  nextBallType = Math.floor(Math.random() * 3);
+  dropTracker = Array(Math.floor(canvas.width / 10)).fill(0);
+  restartBtn.style.display = "none";
+  generateObstacles();
+  gameLoop();
+}
+
+loadBallImages(() => {
+  generateObstacles();
+  gameLoop();
+});
+
+restartBtn.addEventListener("click", restartGame);
+</script>
+</body>
+</html>
